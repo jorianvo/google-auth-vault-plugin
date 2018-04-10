@@ -59,8 +59,8 @@ Developing Vault
 --------------------
 
 If you wish to work on Vault itself or any of its built-in systems, you'll
-first need [Go](https://www.golang.org) installed on your machine (version 1.9+
-is *required*).
+first need [Go](https://www.golang.org) installed on your machine (version
+1.10.1+ is *required*).
 
 For local dev first make sure Go is properly installed, including setting up a
 [GOPATH](https://golang.org/doc/code.html#GOPATH). Next, clone this repository
@@ -102,9 +102,9 @@ $ make test TEST=./vault
 ### Acceptance Tests
 
 Vault has comprehensive [acceptance tests](https://en.wikipedia.org/wiki/Acceptance_testing)
-covering most of the features of the secret and auth backends.
+covering most of the features of the secret and auth methods.
 
-If you're working on a feature of a secret or auth backend and want to
+If you're working on a feature of a secret or auth method and want to
 verify it is functioning (and also hasn't broken anything else), we recommend
 running the acceptance tests.
 
