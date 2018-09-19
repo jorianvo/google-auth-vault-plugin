@@ -5,33 +5,39 @@ THIS_FILE := $(lastword $(MAKEFILE_LIST))
 TEST?=$$(go list ./... | grep -v /vendor/ | grep -v /integ)
 VETARGS?=-asmdecl -atomic -bool -buildtags -copylocks -methods -nilfunc -printf -rangeloops -shift -structtags -unsafeptr
 EXTERNAL_TOOLS=\
+	github.com/elazarl/go-bindata-assetfs/... \
+	github.com/hashicorp/go-bindata/... \
 	github.com/mitchellh/gox \
 	github.com/kardianos/govendor \
 	github.com/client9/misspell/cmd/misspell
 BUILD_TAGS?=vault
 GOFMT_FILES?=$$(find . -name '*.go' | grep -v vendor)
 
-GO_VERSION_MIN=1.9.1
+GO_VERSION_MIN=1.10
 
 default: dev
 
-# bin generates the releaseable binaries for Vault
+# bin generates the releasable binaries for Vault
 bin: prep
-	@CGO_ENABLED=0 BUILD_TAGS='$(BUILD_TAGS)' sh -c "'$(CURDIR)/scripts/build.sh'"
+	@CGO_ENABLED=0 BUILD_TAGS='$(BUILD_TAGS) ui' sh -c "'$(CURDIR)/scripts/build.sh'"
 
 # dev creates binaries for testing Vault locally. These are put
-# into ./bin/ as well as $GOPATH/bin, except for quickdev which
-# is only put into /bin/
-quickdev: prep
-	@CGO_ENABLED=0 go build -i -tags='$(BUILD_TAGS)' -o bin/vault
+# into ./bin/ as well as $GOPATH/bin
 dev: prep
 	@CGO_ENABLED=0 BUILD_TAGS='$(BUILD_TAGS)' VAULT_DEV_BUILD=1 sh -c "'$(CURDIR)/scripts/build.sh'"
+dev-ui: prep
+	@CGO_ENABLED=0 BUILD_TAGS='$(BUILD_TAGS) ui' VAULT_DEV_BUILD=1 sh -c "'$(CURDIR)/scripts/build.sh'"
 dev-dynamic: prep
 	@CGO_ENABLED=1 BUILD_TAGS='$(BUILD_TAGS)' VAULT_DEV_BUILD=1 sh -c "'$(CURDIR)/scripts/build.sh'"
 
 # test runs the unit tests and vets the code
 test: prep
-	CGO_ENABLED=0 VAULT_TOKEN= VAULT_ACC= go test -tags='$(BUILD_TAGS)' $(TEST) $(TESTARGS) -timeout=20m -parallel=4
+	@CGO_ENABLED=0 \
+	VAULT_ADDR= \
+	VAULT_TOKEN= \
+	VAULT_DEV_ROOT_TOKEN_ID= \
+	VAULT_ACC= \
+	go test -tags='$(BUILD_TAGS)' $(TEST) $(TESTARGS) -timeout=20m -parallel=20
 
 testcompile: prep
 	@for pkg in $(TEST) ; do \
@@ -48,7 +54,12 @@ testacc: prep
 
 # testrace runs the race checker
 testrace: prep
-	CGO_ENABLED=1 VAULT_TOKEN= VAULT_ACC= go test -tags='$(BUILD_TAGS)' -race $(TEST) $(TESTARGS) -timeout=45m -parallel=4
+	@CGO_ENABLED=1 \
+	VAULT_ADDR= \
+	VAULT_TOKEN= \
+	VAULT_DEV_ROOT_TOKEN_ID= \
+	VAULT_ACC= \
+	go test -tags='$(BUILD_TAGS)' -race $(TEST) $(TESTARGS) -timeout=45m -parallel=20
 
 cover:
 	./scripts/coverage.sh --html
@@ -78,6 +89,32 @@ bootstrap:
 		go get -u $$tool; \
 	done
 
+update-plugins:
+	grep vault-plugin- vendor/vendor.json | cut -d '"' -f 4 | xargs govendor fetch
+
+static-assets:
+	@echo "--> Generating static assets"
+	@go-bindata-assetfs -o bindata_assetfs.go -pkg http -prefix pkg -modtime 1480000000 ./pkg/web_ui/...
+	@mv bindata_assetfs.go http
+	@$(MAKE) -f $(THIS_FILE) fmt
+
+test-ember:
+	@echo "--> Installing JavaScript assets"
+	@cd ui && yarn install && bower install && yarn install phantomjs-prebuilt
+	@echo "--> Running ember tests"
+	@cd ui && node_modules/phantomjs-prebuilt/bin/phantomjs --version
+	@cd ui && npm test
+
+ember-dist:
+	@echo "--> Installing JavaScript assets"
+	@cd ui && yarn install && bower install --allow-root
+	@cd ui && npm rebuild node-sass
+	@echo "--> Building Ember application"
+	@cd ui && npm run build
+	@rm -rf ui/if-you-need-to-delete-this-open-an-issue-async-disk-cache
+
+static-dist: ember-dist static-assets
+
 proto:
 	protoc -I helper/forwarding -I vault -I ../../.. vault/*.proto --go_out=plugins=grpc:vault
 	protoc -I helper/storagepacker helper/storagepacker/types.proto --go_out=plugins=grpc:helper/storagepacker
@@ -85,7 +122,8 @@ proto:
 	protoc -I physical physical/types.proto --go_out=plugins=grpc:physical
 	protoc -I helper/identity -I ../../.. helper/identity/types.proto --go_out=plugins=grpc:helper/identity
 	protoc  builtin/logical/database/dbplugin/*.proto --go_out=plugins=grpc:.
-	sed -i -e 's/Idp/IDP/' -e 's/Url/URL/' -e 's/Id/ID/' -e 's/EntityId/EntityID/' -e 's/Api/API/' -e 's/Qr/QR/' -e 's/protobuf:"/sentinel:"" protobuf:"/' helper/identity/types.pb.go helper/storagepacker/types.pb.go
+	protoc  logical/plugin/pb/*.proto --go_out=plugins=grpc:.
+	sed -i -e 's/Idp/IDP/' -e 's/Url/URL/' -e 's/Id/ID/' -e 's/EntityId/EntityID/' -e 's/Api/API/' -e 's/Qr/QR/' -e 's/protobuf:"/sentinel:"" protobuf:"/' helper/identity/types.pb.go helper/storagepacker/types.pb.go logical/plugin/pb/backend.pb.go
 	sed -i -e 's/Iv/IV/' -e 's/Hmac/HMAC/' physical/types.pb.go
 
 fmtcheck:
@@ -119,4 +157,4 @@ hana-database-plugin:
 mongodb-database-plugin:
 	@CGO_ENABLED=0 go build -o bin/mongodb-database-plugin ./plugins/database/mongodb/mongodb-database-plugin
 
-.PHONY: bin default prep test vet bootstrap fmt fmtcheck mysql-database-plugin mysql-legacy-database-plugin cassandra-database-plugin postgresql-database-plugin mssql-database-plugin hana-database-plugin mongodb-database-plugin
+.PHONY: bin default prep test vet bootstrap fmt fmtcheck mysql-database-plugin mysql-legacy-database-plugin cassandra-database-plugin postgresql-database-plugin mssql-database-plugin hana-database-plugin mongodb-database-plugin static-assets ember-dist static-dist

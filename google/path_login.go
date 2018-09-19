@@ -19,10 +19,10 @@ const (
 	roleParameterName           = "role"
 )
 
-func (b *backend) pathLogin(req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
+func (b *backend) pathLogin(ctx context.Context, req *logical.Request, data *framework.FieldData) (*logical.Response, error) {
 	code := data.Get(googleAuthCodeParameterName).(string)
 	roleName := data.Get(roleParameterName).(string)
-	role, err := b.role(req.Storage, roleName)
+	role, err := b.role(ctx, req.Storage, roleName)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func (b *backend) pathLogin(req *logical.Request, data *framework.FieldData) (*l
 		return logical.ErrorResponse(fmt.Sprintf("role '%s' not found", roleName)), nil
 	}
 
-	config, err := b.config(req.Storage)
+	config, err := b.config(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -54,11 +54,6 @@ func (b *backend) pathLogin(req *logical.Request, data *framework.FieldData) (*l
 		return logical.ErrorResponse(err.Error()), nil
 	}
 
-	ttl, _, err := b.SanitizeTTL(role.TTL, role.MaxTTL)
-	if err != nil {
-		return nil, err
-	}
-
 	encodedToken, err := encodeToken(token)
 	if err != nil {
 		return nil, err
@@ -77,14 +72,14 @@ func (b *backend) pathLogin(req *logical.Request, data *framework.FieldData) (*l
 			},
 			DisplayName: user.Email,
 			LeaseOptions: logical.LeaseOptions{
-				TTL:       ttl,
+				TTL:       role.TTL,
 				Renewable: true,
 			},
 		},
 	}, nil
 }
 
-func (b *backend) authRenew(req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+func (b *backend) authRenew(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	encodedToken, ok := req.Auth.InternalData["token"].(string)
 	if !ok {
 		return nil, errors.New("no refresh token from previous login")
@@ -95,7 +90,7 @@ func (b *backend) authRenew(req *logical.Request, d *framework.FieldData) (*logi
 		return nil, errors.New("no role name from previous login")
 	}
 
-	role, err := b.role(req.Storage, roleName)
+	role, err := b.role(ctx, req.Storage, roleName)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +98,7 @@ func (b *backend) authRenew(req *logical.Request, d *framework.FieldData) (*logi
 		return nil, fmt.Errorf("role '%s' not found", roleName)
 	}
 
-	config, err := b.config(req.Storage)
+	config, err := b.config(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
@@ -130,12 +125,7 @@ func (b *backend) authRenew(req *logical.Request, d *framework.FieldData) (*logi
 		return logical.ErrorResponse(fmt.Sprintf("policies do not match. new policies: %s. old policies: %s.", policies, req.Auth.Policies)), nil
 	}
 
-	ttl, maxTTL, err := b.SanitizeTTL(role.TTL, role.MaxTTL)
-	if err != nil {
-		return logical.ErrorResponse(err.Error()), nil
-	}
-
-	return framework.LeaseExtend(ttl, maxTTL, b.System())(req, d)
+	return framework.LeaseExtend(role.TTL, role.MaxTTL, b.System())(ctx, req, d)
 }
 
 func (b *backend) authenticate(config *config, token *oauth2.Token) (*goauth.Userinfoplus, []string, error) {
@@ -173,8 +163,8 @@ func (b *backend) authenticate(config *config, token *oauth2.Token) (*goauth.Use
 }
 
 func (b *backend) authorise(storage logical.Storage, role *role, user *goauth.Userinfoplus, groups []string) ([]string, error) {
-	if user.Hd != role.BoundDomain {
-		return nil, fmt.Errorf("user is not part of required domain")
+	if user.Hd != role.BoundDomain && role.BoundDomain != "" {
+		return nil, fmt.Errorf("user %s is not part of required domain %s, found %s", user.Email, role.BoundDomain, user.Hd)
 	}
 
 	// Is this user in one of the bound groups for this role?
